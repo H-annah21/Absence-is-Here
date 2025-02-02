@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AR Face Model with GLTFLoader</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      background: #000;
+    }
+    #video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0;
+    }
+    #arCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline></video>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+
+  <script>
+    const video = document.getElementById('video');
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+        .then((stream) => {
+          video.srcObject = stream;
+          video.play();
+        })
+        .catch((err) => {
+          console.error("Error accessing camera: ", err);
+        });
+    } else {
+      alert("getUserMedia not supported in this browser.");
+    }
+
+    // Three.js setup
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
+    camera.position.z = 2;
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.domElement.id = 'arCanvas';
+    document.body.appendChild(renderer.domElement);
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(0, 10, 10);
+    scene.add(directionalLight);
+
+    // Load 3D Face Model
+    const gltfLoader = new THREE.GLTFLoader();
+    let faceModel;
+    const modelUrl = "https://cdn.glitch.me/b6c82681-9faf-4574-95c5-c147cb6313a6/Bust_textured_mesh_glb.glb?v=1738456801631";
+
+    gltfLoader.load(
+      modelUrl,
+      (gltf) => {
+        faceModel = gltf.scene;
+        faceModel.scale.set(0.8, 0.8, 0.8);
+        faceModel.position.set(0, 0, 0);
+        scene.add(faceModel);
+      },
+      (xhr) => console.log((xhr.loaded / xhr.total * 100) + '% loaded'),
+      (error) => console.error('An error happened loading the model:', error)
+    );
+
+    // Initialize FaceMesh for face tracking
+    const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+    // Connect video feed
+    const onResults = (results) => {
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) return;
+      const landmarks = results.multiFaceLandmarks[0];
+
+      if (faceModel) {
+        const nose = landmarks[1]; // Nose tip landmark
+        const leftEye = landmarks[33]; // Left eye
+        const rightEye = landmarks[263]; // Right eye
+
+        // Convert 2D screen coordinates to 3D position
+        faceModel.position.set((nose.x - 0.5) * 2, -(nose.y - 0.5) * 2, -nose.z * 2);
+
+        // Calculate rotation based on eye positions
+        const dx = rightEye.x - leftEye.x;
+        const dy = rightEye.y - leftEye.y;
+        const angle = Math.atan2(dy, dx);
+        faceModel.rotation.y = angle;
+      }
+    };
+
+    const faceMeshCamera = new Camera(video, { onFrame: async () => await faceMesh.send({ image: video }) });
+    faceMeshCamera.start();
+    faceMesh.onResults(onResults);
+
+    // Render Loop
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize handling
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    
+  </script>
+</body>
+</html>
